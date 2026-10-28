@@ -67,9 +67,31 @@ python3 DriveBy.py    # live detection + overlay (press q to quit)
 
 ```
 
-## Architecture
+## Annotator (runs on a GPU machine)
+The Pi only records. Detection, tracking, and rendering happen afterward on a Windows PC with an NVIDIA GPU, in `annotator/`.
 
-Recording now happens on the Pi with `record.py`. Detection, tracking, and rendering run afterward on a separate GPU machine, which isn't part of this repo yet.
+### `process_driveby.bat` — one-click pipeline
+Drag a folder of drive chunks onto it, or run it and paste the path. It:
+1. Remuxes raw `.h264` chunks to `.mp4` with ffmpeg
+2. Runs `detect.py` over the folder
+3. Runs `render.py` on every chunk that has detections but no annotated output yet
+
+Every step skips finished work, so it's safe to stop and re-run.
+
+### `detect.py` — GPU detection + tracking
+Runs YOLO26l with ByteTrack (pipeline defaults: confidence 0.05, 960px input) and writes a `.bytetrack.jsonl` sidecar per chunk, with one record per detection: frame, class, track ID, confidence, and box. Confidence is kept deliberately low so all filtering happens at render time.
+
+### `render.py` — annotation + counts
+Reads a video and its sidecar and produces:
+- `.annotated.mp4` with boxes, track IDs, and a live leaderboard (Russian or English labels)
+- `.counts.txt` with per-chunk totals
+
+Filtering (confidence floor, minimum track length, class groups like `vehicles` / `road` / `animals`) is applied here, so thresholds can change without re-running the GPU pass. `--drive FOLDER` carries the leaderboard across chunks and writes `drive_totals.txt`. GPS overlay support is in progress.
+
+### Setup
+- Python venv with `ultralytics`, `opencv-python`, `pillow`, `numpy` (CUDA build of PyTorch)
+- `ffmpeg` on PATH
+- The pipeline expects the venv at `%USERPROFILE%\driveby-env`. Edit `PY=` in the `.bat` if yours is elsewhere.
 
 ## Privacy
 
