@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# Local library installs
+packages/
+packages-*/
+
+# Model weights
+*.pt
+*.onnx
+
+# Video output
+*.h264
+*.mp4
+*.mkv
+
+# GPS / drive logs (contain location data)
+*.gpx
+*.csv
+*.jsonl
+*.log
+
+# Secrets
+.env
