@@ -3,6 +3,8 @@
 
 A Raspberry Pi 5 dashcam that records drives with synced GPS, plus an on-device object-detection mode with a live Russian-language leaderboard overlay.
 
+   ![DriveBy annotated frame](screenshot.png)
+
 ## Scripts
 
 ### `record.py` — record-only mode (current)
