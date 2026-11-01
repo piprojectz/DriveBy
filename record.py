@@ -13,8 +13,7 @@ FRAMERATE       = 30
 BITRATE         = 12_000_000       # ~90 MB/min
 CHUNK_MINUTES   = 10
 SAVE_DIR        = os.path.expanduser("~/Videos/DriveRaw")
-GPSD_HOST       = "127.0.0.1"
-GPSD_PORT       = 2947
+GPS_PORT        = "/dev/serial/by-id/usb-u-blox_AG_-_www.u-blox.com_u-blox_7_-_GPS_GNSS_Receiver-if00"
 # ----------------------------
 
 os.makedirs(SAVE_DIR, exist_ok=True)
@@ -37,55 +36,65 @@ signal.signal(signal.SIGTERM, stop)
 
 # ---------- GPS LOGGER ----------
 def gps_logger():
-    """Read TPV reports straight from gpsd's JSON socket and append them to
-    the current chunk's .gps.jsonl. Reconnects if gpsd drops or goes quiet."""
+    """Read NMEA straight from the USB GPS and append fixes to the current
+    chunk's .gps.jsonl. Reconnects if the dongle drops or goes quiet."""
+    import serial
+
+    def dm(v, h):
+        if not v: return None
+        d = 2 if h in "NS" else 3
+        x = float(v[:d]) + float(v[d:]) / 60
+        return round(-x if h in "SW" else x, 7)
+
+    gga = {}
     while running:
-        s = None
         try:
-            s = socket.create_connection((GPSD_HOST, GPSD_PORT), timeout=5)
-            s.sendall(b'?WATCH={"enable":true,"json":true};\n')
-            stream = s.makefile("r", encoding="utf-8", errors="replace")
-            print("[GPS] Connected to gpsd", flush=True)
-            last_utc = None
-
-            for line in stream:
-                if not running:
-                    break
-                try:
-                    msg = json.loads(line)
-                except ValueError:
-                    continue
-                if msg.get("class") != "TPV" or msg.get("mode", 0) < 2:
-                    continue   # skip non-position reports and no-fix
-                if msg.get("time") == last_utc:
-                    continue   # gpsd sends several TPVs per GPS epoch; keep one
-                last_utc = msg.get("time")
-
-                rec = {
-                    "t_mono": time.monotonic(),          # same clock as started_monotonic
-                    "utc": msg.get("time"),
-                    "lat": msg.get("lat"),
-                    "lon": msg.get("lon"),
-                    "alt_m": msg.get("altMSL", msg.get("alt")),
-                    "speed_mps": msg.get("speed"),
-                    "track_deg": msg.get("track"),
-                    "mode": msg.get("mode"),             # 2 = 2D fix, 3 = 3D fix
-                    "eph_m": msg.get("eph"),             # horizontal error estimate
-                }
-                with gps_lock:
-                    if gps_fh is not None:
-                        gps_fh.write(json.dumps(rec) + "\n")
-                        gps_fh.flush()
+            with serial.Serial(GPS_PORT, 9600, timeout=2) as s:
+                print("[GPS] Connected to dongle", flush=True)
+                quiet = 0
+                while running:
+                    raw = s.readline()
+                    if not raw:
+                        quiet += 1
+                        if quiet >= 5:
+                            raise OSError("no GPS data for 10s")
+                        continue
+                    quiet = 0
+                    line = raw.decode("ascii", "ignore").strip()
+                    if not line.startswith("$") or "*" not in line:
+                        continue
+                    body, cs = line[1:].split("*", 1)
+                    c = 0
+                    for ch in body: c ^= ord(ch)
+                    if f"{c:02X}" != cs[:2].upper():
+                        continue
+                    p = body.split(",")
+                    t = p[0][2:]
+                    if t == "GGA" and len(p) > 9:
+                        gga = {"sats": p[7], "hdop": p[8], "alt": p[9]}
+                    elif t == "RMC" and len(p) > 9 and p[2] == "A":
+                        d = p[9]
+                        utc = f"20{d[4:6]}-{d[2:4]}-{d[0:2]}T{p[1][0:2]}:{p[1][2:4]}:{float(p[1][4:]):06.3f}Z"
+                        rec = {
+                            "t_mono": time.monotonic(),
+                            "utc": utc,
+                            "lat": dm(p[3], p[4]),
+                            "lon": dm(p[5], p[6]),
+                            "alt_m": float(gga["alt"]) if gga.get("alt") else None,
+                            "speed_mps": round(float(p[7]) * 0.514444, 3) if p[7] else None,
+                            "track_deg": float(p[8]) if p[8] else None,
+                            "mode": 3 if gga.get("alt") else 2,
+                            "sats": int(gga["sats"]) if gga.get("sats") else None,
+                            "hdop": float(gga["hdop"]) if gga.get("hdop") else None,
+                        }
+                        with gps_lock:
+                            if gps_fh is not None:
+                                gps_fh.write(json.dumps(rec) + "\n")
+                                gps_fh.flush()
         except OSError as e:
             if running:
                 print(f"[GPS] {e}; retrying in 3s", flush=True)
                 time.sleep(3)
-        finally:
-            if s is not None:
-                try:
-                    s.close()
-                except OSError:
-                    pass
 
 
 threading.Thread(target=gps_logger, daemon=True).start()

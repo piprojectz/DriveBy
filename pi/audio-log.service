@@ -1,0 +1,12 @@
+[Unit]
+Description=DriveBy audio logger
+After=sound.target
+
+[Service]
+User=debo
+ExecStart=/usr/bin/arecord -D plughw:CARD=Device,DEV=0 -f S16_LE -r 48000 -c 1 --max-file-time=600 --use-strftime /home/debo/audio_logs/audio_%%Y%%m%%d_%%H%%M%%S.wav
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
